@@ -1,3 +1,4 @@
-flask
-google-genai
-numpy
+Flask>=3.0.0
+google-genai>=0.3.0
+numpy>=1.24.0
+faiss-cpu>=1.7.4
