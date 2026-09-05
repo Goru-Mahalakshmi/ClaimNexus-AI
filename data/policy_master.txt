@@ -1,0 +1,6 @@
+CLAUSE 1.1 (COVERAGE): The policy covers accidental damage to the insured vehicle arising from collisions, natural disasters, or theft.
+CLAUSE 2.1 (REQUIRED DOCUMENTS): All claims must include a completed Claim Form, a Customer Incident Description, and a Repair Estimate.
+CLAUSE 2.2 (FIR REQUIREMENT): A Police First Information Report (FIR) is strictly required for claims involving theft, third-party injury, or severe malicious damage.
+CLAUSE 3.1 (EXCLUSIONS - DRIVING UNDER INFLUENCE): The company is not liable for damages if the driver was under the influence of intoxicating liquor or drugs.
+CLAUSE 3.2 (EXCLUSIONS - UNAUTHORIZED USE): Damages occurring while the vehicle is used for illegal purposes or unauthorized racing are excluded.
+CLAUSE 4.1 (REPORTING WINDOW): Claims must be reported within 7 days of the incident date.
