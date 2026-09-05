@@ -1,161 +1,113 @@
 import os
 import json
-import numpy as np
-from flask import Flask, request, render_template_string
+from flask import Flask, render_template, request, jsonify
 from google import genai
 
-app = Flask(__name__)
+from src.rag_engine import LocalVectorStore
 
-# Initialize the Google GenAI client using the environment variable
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# Point Flask to the custom frontend/templates directory
+app = Flask(__name__, template_folder='frontend/templates')
 
-# -----------------------------------------------------------------------------
-# Local Knowledge Base & Document Store (RAG Grounding Material)
-# -----------------------------------------------------------------------------
-KNOWLEDGE_BASE = [
-    {
-        "id": "clause_1_1",
-        "title": "Clause 1.1 (Coverage)",
-        "content": "The policy covers accidental damage from collisions, provided the fundamental facts of how the collision occurred are consistent across all evidentiary records."
-    },
-    {
-        "id": "clause_2_1",
-        "title": "Clause 2.1 (Required Documents)",
-        "content": "Mandatory submission documents include the Claim Form, Customer Incident Description, and a certified Repair Estimate."
-    },
-    {
-        "id": "clause_2_2",
-        "title": "Clause 2.2 (FIR Requirement)",
-        "content": "An official First Information Report (FIR) or police report must be provided when third-party involvement or moving vehicle collisions are claimed. Its contents must align with the customer's primary accident narrative."
-    }
-]
+try:
+    client = genai.Client()
+except Exception as e:
+    print(f"Failed to initialize GenAI client: {e}")
+    client = None
 
-# Simple Local Vector Store using gemini-embedding-001
-class LocalVectorStore:
-    def __init__(self, documents):
-        self.documents = documents
-        self.embeddings = []
-        self._build_index()
+vector_store = None
 
-    def _build_index(self):
-        print("Initializing FAISS-style local vector store with gemini-embedding-001...")
-        for doc in self.documents:
-            text = f"{doc['title']}: {doc['content']}"
-            try:
-                response = client.models.embed_content(
-                    model="gemini-embedding-001",
-                    contents=text
-                )
-                vector = response.embeddings[0].values
-                self.embeddings.append(np.array(vector, dtype=np.float32))
-            except Exception as e:
-                print(f"Embedding-001 execution note: {e}")
-                self.embeddings.append(np.zeros(768, dtype=np.float32))
+def load_policies_into_rag():
+    global vector_store
+    documents = []
+    try:
+        with open("data/policy_master.txt", "r") as f:
+            lines = f.readlines()
+            for line in lines:
+                if ":" in line:
+                    title, content = line.split(":", 1)
+                    documents.append({"title": title.strip(), "content": content.strip()})
+        
+        if client:
+            vector_store = LocalVectorStore(documents, client)
+            print("FAISS Vector Store successfully initialized.")
+    except Exception as e:
+        print(f"Error loading policies: {e}")
 
-    def similarity_search(self, query, top_k=2):
-        try:
-            res = client.models.embed_content(
-                model="gemini-embedding-001",
-                contents=query
-            )
-            q_vector = np.array(res.embeddings[0].values, dtype=np.float32)
-            
-            scores = []
-            for idx, emb in enumerate(self.embeddings):
-                dot_prod = np.dot(q_vector, emb)
-                norm = np.linalg.norm(q_vector) * np.linalg.norm(emb)
-                score = dot_prod / norm if norm > 0 else 0.0
-                scores.append((score, idx))
-            
-            scores.sort(key=lambda x: x[0], reverse=True)
-            return [self.documents[idx] for _, idx in scores[:top_k]]
-        except Exception as e:
-            print(f"Search error: {e}")
-            return self.documents[:top_k]
+load_policies_into_rag()
 
-vector_store = LocalVectorStore(KNOWLEDGE_BASE)
 
-# -----------------------------------------------------------------------------
-# Frontend Template
-# -----------------------------------------------------------------------------
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>ClaimNexus AI - Insurance Evidence Review</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; margin: 0; padding: 40px; color: #333; }
-        .container { max-width: 800px; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin: auto; }
-        h1 { color: #1a365d; font-size: 24px; margin-bottom: 10px; }
-        p { color: #555; }
-        textarea { width: 100%; height: 140px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: monospace; font-size: 14px; margin-top: 10px; box-sizing: border-box; }
-        button { background: #2563eb; color: #fff; border: none; padding: 12px 24px; font-size: 16px; font-weight: 600; border-radius: 6px; cursor: pointer; margin-top: 15px; transition: background 0.2s; }
-        button:hover { background: #1d4ed8; }
-        .result-box { margin-top: 25px; padding: 20px; background: #f8fafc; border-left: 4px solid #2563eb; border-radius: 4px; white-space: pre-wrap; line-height: 1.5; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>ClaimNexus AI — Evidence Review Assistant (PS02)</h1>
-        <p>Paste your JSON claim payload below to test deterministic validation and RAG evidence grounding:</p>
-        <form method="POST" action="/api/review">
-            <textarea name="payload">{{ payload }}</textarea><br>
-            <button type="submit">Review Claim Evidence</button>
-        </form>
-        {% if result %}
-        <div class="result-box"><strong>RESULT:</strong><br>{{ result }}</div>
-        {% endif %}
-    </div>
-</body>
-</html>
-"""
-
-@app.route("/", methods=["GET"])
+@app.route('/')
 def index():
-    default_payload = json.dumps({
-        "claim_form": "Claim ID: 90210, Date of Incident: 2026-08-15, Insured Value: $15,000",
-        "customer_description": "I was driving on Main St and a deer jumped out. I swerved and hit a tree.",
-        "repair_estimate": "Front bumper replacement, radiator repair. Total: $3,200",
-        "fir": "Police report states driver was rear-ended by an unknown vehicle at a stoplight."
-    }, indent=2)
-    return render_template_string(HTML_TEMPLATE, payload=default_payload, result=None)
+    return render_template('index.html')
 
-@app.route("/api/review", methods=["POST"])
-def review_claim():
-    payload_str = request.form.get("payload") or request.data.decode("utf-8")
+
+@app.route('/analyze', methods=['POST'])
+def analyze_claim():
+    req_data = request.get_json()
+    if not req_data:
+        return jsonify({"error": "No payload provided"}), 400
+
+    claim_id = req_data.get("claim_id", "Unknown")
+    customer_desc = req_data.get("customer_description", "")
+    fir_details = req_data.get("fir", "")
     
-    relevant_docs = vector_store.similarity_search(payload_str, top_k=2)
-    rag_context = "\n".join([f"- {doc['title']}: {doc['content']}" for doc in relevant_docs])
+    # 1. FAISS RAG Retrieval Phase
+    search_query = f"Collision, hit-and-run, documentation requirements, impact vectors for: {customer_desc}. Police report states: {fir_details}"
+    
+    retrieved_policies = []
+    if vector_store:
+        retrieved_policies = vector_store.similarity_search(search_query, top_k=3)
+    
+    context_text = "\n".join([f"- {doc['title']}: {doc['content']}" for doc in retrieved_policies])
 
+    # 2. LLM Reasoning Phase using Gemini 3.5 Flash Lite
     prompt = f"""
-    You are an expert Insurance Evidence Review AI assistant. 
-    Analyze the following insurance claim JSON payload against the provided policy clauses (RAG Context).
+    You are an expert insurance claims fraud investigator. Evaluate the following claim data strictly against the retrieved policy clauses.
+    Do not invent information. If information is missing, explicitly state it.
     
-    Policy Clauses Context:
-    {rag_context}
+    RELEVANT POLICY CLAUSES:
+    {context_text}
     
-    Claim Payload:
-    {payload_str}
+    CLAIM DATA:
+    {json.dumps(req_data, indent=2)}
     
-    Provide your response in clear, structured sections:
-    - RECOMMENDATION: (e.g. Escalate / Approve / Reject)
-    - DAMAGE VECTOR CHECK: Analysis of physical impact match between description, estimates, and FIR.
-    - KEY FINDINGS & CONTRADICTIONS: Bullet points of exact contradictions found.
-    - POLICY ALIGNMENT: Direct clause citations mapping to findings.
+    Provide your response formatted exactly as HTML snippet to inject into a dashboard:
+    1. A short <p><strong>Analysis:</strong> ...</p> summarizing the findings.
+    2. A <ul> with classes 'list-disc pl-5 space-y-2 text-xs text-slate-300' containing:
+       - <li><strong>Claim ID:</strong> [ID]</li>
+       - <li><strong>Evidence Check:</strong> [Explain contradictions, alignments, or missing docs based on Policy]</li>
+       - <li><strong>Recommendation:</strong> <span class="[color-class] font-bold">[APPROVE / REJECT / REQUEST_INFO]</span></li>
+       
+    Use text-rose-400 for REJECT, text-emerald-400 for APPROVE, text-amber-400 for REQUEST_INFO.
+    Also, prefix your response with a Risk Indicator badge rating (e.g., RISK_SCORE: 85).
     """
 
     try:
-        # Updated to use the correct model identifier: gemini-3.5-flash-lite
         response = client.models.generate_content(
             model='gemini-3.5-flash-lite',
-            contents=prompt,
+            contents=prompt
         )
-        result_text = response.text
+        output_text = response.text
+        
+        risk_score = 50
+        html_output = output_text
+        if "RISK_SCORE:" in output_text:
+            parts = output_text.split("RISK_SCORE:")
+            try:
+                risk_score_str = parts[1].split()[0][:2]
+                risk_score = int(risk_score_str)
+            except:
+                pass
+            html_output = parts[1].split("\n", 1)[1] 
+            
+        return jsonify({
+            "html": html_output.replace("```html", "").replace("```", "").strip(),
+            "risk_score": risk_score
+        })
+        
     except Exception as e:
-        result_text = f"Error during model generation: {str(e)}"
+        return jsonify({"html": f"<p class='text-rose-400'>Analysis Failed: {str(e)}</p>", "risk_score": 100})
 
-    return render_template_string(HTML_TEMPLATE, payload=payload_str, result=result_text)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=False)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000, debug=False)
